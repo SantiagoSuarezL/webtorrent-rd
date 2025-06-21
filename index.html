@@ -1,0 +1,119 @@
+<!--
+Proyecto P2P "Fácil" - Versión Final
+-------------------------------------
+Simplificado: saneamiento total de whitespace, manejo claro de errores.
+-->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prototipo P2P con WebTorrent</title>
+  <style>
+    body { font-family: sans-serif; padding: 2rem; }
+    video { max-width: 100%; margin-top: 1rem; border: 1px solid #ccc; border-radius: 8px; box-shadow: 2px 2px 10px rgba(0,0,0,0.1); }
+    textarea, button { padding: 0.5rem; margin-top: 0.5rem; width: 100%; max-width: 800px; box-sizing: border-box; }
+    #status { margin-top: 1rem; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Prototipo P2P "Fácil" - Versión Final</h1>
+  <p>Esta versión remueve todos los espacios en blanco de la URI para evitar identificadores inválidos.</p>
+
+  <label for="magnet">Magnet URI / Info Hash:</label><br>
+  <textarea id="magnet" rows="2" placeholder="Pega aquí tu magnet link o solo el info hash"></textarea><br>
+  <button id="start">Iniciar descarga P2P</button>
+
+  <div id="status">Estado: esperando acción...</div>
+  <video id="player" controls autoplay></video>
+
+  <script src="https://cdn.jsdelivr.net/npm/webtorrent@latest/webtorrent.min.js"></script>
+  <script>
+    const client = new WebTorrent();
+    const magnetInput = document.getElementById('magnet');
+    const startBtn = document.getElementById('start');
+    const statusDiv = document.getElementById('status');
+    const player = document.getElementById('player');
+    const trackers = [
+        'wss://tracker.openwebtorrent.com',
+        'wss://tracker.btorrent.xyz',
+        'wss://tracker.openwebtorrent.com:443'
+    ];
+
+
+    client.on('warning', err => console.warn('Aviso WebTorrent:', err.message));
+    client.on('error', err => console.error('Error global WebTorrent:', err));
+
+    function sanitize(input) {
+      // Elimina todos los espacios en blanco (espacios, tabs, saltos de línea)
+      return input.replace(/\s+/g, '');
+    }
+
+    function addTorrent(rawUri) {
+      let uri = sanitize(rawUri);
+      if (!uri) {
+        statusDiv.textContent = 'Error: URI vacía.';
+        return;
+      }
+      if (client.torrents.find(t => t.infoHash === uri || t.magnetURI === uri)) {
+        statusDiv.textContent = 'Estado: torrent ya añadido.';
+        return;
+      }
+
+      statusDiv.textContent = 'Estado: añadiendo torrent...';
+      let metadataTimer;
+
+      try {
+        const addArgs = uri.startsWith('magnet:')
+          ? [uri, { announce: trackers }]
+          : [{ infoHash: uri, announce: trackers }];
+
+        const torrent = client.add(...addArgs, t => {
+          clearTimeout(metadataTimer);
+          statusDiv.textContent = `Estado: metadata recibida (hash: ${t.infoHash}).`;
+
+          t.on('wire', () => statusDiv.textContent = 'Estado: conectando a peers...');
+          t.on('download', () => {
+            const progress = (t.progress * 100).toFixed(2);
+            statusDiv.textContent = `Estado: ${progress}% descargado, peers: ${t.numPeers}`;
+          });
+          torrent.on('done', () => {
+            const file = torrent.files.find(f =>
+                f.name.endsWith('.mp4') ||
+                f.name.endsWith('.webm') ||
+                f.name.endsWith('.mkv')
+            );
+
+            if (file) {
+                statusDiv.textContent = 'Reproduciendo archivo completado: ' + file.name;
+                file.renderTo(player);
+            } else {
+                statusDiv.textContent = 'Error: no se encontró archivo de video reproducible.';
+            }
+            });
+        });
+
+        torrent.on('error', err => {
+          clearTimeout(metadataTimer);
+          statusDiv.textContent = `Error: ${err.message}`;
+          console.error('Error torrent:', err);
+        });
+
+        // Timeout de metadata
+        metadataTimer = setTimeout(() => {
+          client.remove(torrent);
+          statusDiv.textContent = 'Error: no se obtuvo metadata en 60 segundos.';
+        }, 60000);
+
+
+      } catch (err) {
+        statusDiv.textContent = `Error lanzamiento: ${err.message}`;
+        console.error('Error addTorrent:', err);
+      }
+    }
+
+    startBtn.addEventListener('click', () => addTorrent(magnetInput.value));
+  </script>
+</body>
+</html>
